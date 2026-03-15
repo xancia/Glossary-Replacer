@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Glossary Replacer Options</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family: "Segoe UI", Tahoma, sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 20px;
+        background: #f5f7fb;
+        color: #1c2333;
+      }
+      .container {
+        max-width: 1080px;
+        margin: 0 auto;
+        background: #ffffff;
+        border: 1px solid #dce3ef;
+        border-radius: 10px;
+        padding: 18px;
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 22px;
+      }
+      h2 {
+        margin: 0 0 8px;
+        font-size: 18px;
+      }
+      p {
+        margin: 6px 0;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+      .panel {
+        border: 1px solid #dce3ef;
+        border-radius: 8px;
+        padding: 12px;
+        background: #fcfdff;
+      }
+      textarea,
+      input[type="text"],
+      select {
+        width: 100%;
+        border: 1px solid #c7d3e8;
+        border-radius: 8px;
+        padding: 10px;
+        box-sizing: border-box;
+        font-size: 13px;
+        background: #fff;
+      }
+      textarea {
+        min-height: 220px;
+        resize: vertical;
+        font-family: Consolas, "Courier New", monospace;
+        line-height: 1.4;
+      }
+      .small {
+        min-height: 90px;
+      }
+      button {
+        border: 1px solid #c7d3e8;
+        background: #ffffff;
+        border-radius: 8px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      button.primary {
+        border-color: #3156c5;
+        background: #3156c5;
+        color: #ffffff;
+      }
+      button:hover {
+        filter: brightness(0.98);
+      }
+      .stats {
+        font-size: 12px;
+        color: #4d5975;
+      }
+      .hint {
+        font-size: 12px;
+        color: #586581;
+      }
+      #status {
+        min-height: 20px;
+        font-size: 13px;
+      }
+      .ok {
+        color: #0f7d2c;
+      }
+      .error {
+        color: #b32929;
+      }
+      @media (min-width: 960px) {
+        .grid {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <h1>Glossary Pre-Translate Replacer</h1>
+      <p>
+        Replacement flow: global glossary by allowed domains, then matching local
+        glossary for a book/page. Local glossary overrides global on conflicts.
+      </p>
+
+      <div class="row" style="margin: 10px 0 12px">
+        <label>
+          <input id="enabled" type="checkbox" />
+          Enable replacement
+        </label>
+        <span class="stats" id="summaryStats"></span>
+      </div>
+
+      <div class="row" style="margin: 8px 0 14px">
+        <button class="primary" id="saveBtn">Save all settings</button>
+        <span class="hint">Changes apply to open tabs automatically.</span>
+      </div>
+
+      <div id="status" aria-live="polite"></div>
+
+      <div class="grid">
+        <section class="panel">
+          <h2>Global</h2>
+          <p class="hint">
+            Replacements only run when URL matches these patterns. One pattern per
+            line, e.g. <code>https://69shuba.tw/*</code>.
+          </p>
+          <textarea
+            id="globalPatterns"
+            class="small"
+            spellcheck="false"
+            placeholder="https://69shuba.tw/*"
+          ></textarea>
+          <p class="stats" id="patternStats"></p>
+
+          <div class="row" style="margin: 10px 0">
+            <button id="loadDefaultBtn">Load bundled glossary</button>
+            <button id="importGlobalBtn">Import global glossary</button>
+            <button id="exportGlobalBtn">Export global glossary</button>
+            <input id="globalFileInput" type="file" accept=".md,.txt" hidden />
+          </div>
+
+          <textarea
+            id="globalRulesText"
+            spellcheck="false"
+            placeholder="Example: 宇智波佐助=Uchiha Sasuke"
+          ></textarea>
+          <p class="stats" id="globalStats"></p>
+        </section>
+
+        <section class="panel">
+          <h2>Local Glossary (Per Book/URL)</h2>
+          <p class="hint">
+            Add entries like <code>https://69shuba.tw/read/382455/*</code>. If a
+            local and global rule share the same source term, local wins.
+          </p>
+
+          <div class="row" style="margin-bottom: 8px">
+            <select id="localSelect"></select>
+            <button id="addLocalBtn">Add</button>
+            <button id="removeLocalBtn">Remove</button>
+          </div>
+
+          <label class="hint" for="localTitle">Label (optional)</label>
+          <input
+            id="localTitle"
+            type="text"
+            placeholder="Book name, e.g. Apotheosis Chapter Glossary"
+          />
+
+          <label class="hint" for="localPattern" style="display: block; margin-top: 8px">
+            URL pattern
+          </label>
+          <input
+            id="localPattern"
+            type="text"
+            spellcheck="false"
+            placeholder="https://69shuba.tw/read/382455/*"
+          />
+
+          <div class="row" style="margin: 10px 0">
+            <button id="importLocalBtn">Import local glossary</button>
+            <button id="exportLocalBtn">Export local glossary</button>
+            <input id="localFileInput" type="file" accept=".md,.txt" hidden />
+          </div>
+
+          <textarea
+            id="localRulesText"
+            spellcheck="false"
+            placeholder="Example: 李长生=Li Changsheng"
+          ></textarea>
+          <p class="stats" id="localStats"></p>
+        </section>
+      </div>
+
+      <p class="hint" style="margin-top: 14px">
+        Supported separators: <code>=</code>, <code>-></code>,
+        <code>=></code>, <code>→</code>. Comment lines starting with
+        <code>#</code>, <code>//</code>, or <code>;</code> are ignored.
+      </p>
+    </main>
+
+    <script src="options.js"></script>
+  </body>
+</html>

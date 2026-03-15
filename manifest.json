@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "Glossary Pre-Translate Replacer",
+  "version": "1.1.0",
+  "description": "Replaces glossary terms on pages before translation.",
+  "permissions": [
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Glossary Replacer",
+    "default_popup": "popup.html"
+  }
+}
