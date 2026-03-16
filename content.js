@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   "use strict";
 
   const STORAGE_DEFAULTS = {
@@ -225,6 +225,21 @@
     };
   }
 
+  const WORD_CHAR_RE = /[\p{L}\p{N}]/u;
+
+  function isWordLikeChar(ch) {
+    return Boolean(ch) && WORD_CHAR_RE.test(ch);
+  }
+
+  function shouldInsertSpaceBetweenReplacements(previousReplacement, nextReplacement) {
+    if (!previousReplacement || !nextReplacement) {
+      return false;
+    }
+    const prevLastChar = previousReplacement[previousReplacement.length - 1];
+    const nextFirstChar = nextReplacement[0];
+    return isWordLikeChar(prevLastChar) && isWordLikeChar(nextFirstChar);
+  }
+
   function replaceString(input, trie) {
     if (!input || !trie || trie.count === 0) {
       return { text: input, changed: false };
@@ -233,12 +248,16 @@
     let output = "";
     let changed = false;
     let i = 0;
+    let lastSegmentWasReplacement = false;
+    let lastReplacementText = "";
 
     while (i < input.length) {
       const first = input[i];
       if (!trie.startChars.has(first)) {
         output += first;
         i += 1;
+        lastSegmentWasReplacement = false;
+        lastReplacementText = "";
         continue;
       }
 
@@ -246,6 +265,8 @@
       if (!node) {
         output += first;
         i += 1;
+        lastSegmentWasReplacement = false;
+        lastReplacementText = "";
         continue;
       }
 
@@ -267,12 +288,22 @@
       }
 
       if (bestLength > 0) {
+        if (
+          lastSegmentWasReplacement &&
+          shouldInsertSpaceBetweenReplacements(lastReplacementText, bestReplacement)
+        ) {
+          output += " ";
+        }
         output += bestReplacement;
         i += bestLength;
         changed = true;
+        lastSegmentWasReplacement = true;
+        lastReplacementText = bestReplacement;
       } else {
         output += first;
         i += 1;
+        lastSegmentWasReplacement = false;
+        lastReplacementText = "";
       }
     }
 
@@ -431,3 +462,4 @@
     { once: true }
   );
 })();
+
