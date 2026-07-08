@@ -21,6 +21,20 @@
   let engine = null;
   let observer = null;
   const patternRegexCache = new Map();
+  const lastWrittenValues = new WeakMap();
+
+  // Published on <html> so downstream extensions (e.g. the novel formatter)
+  // can wait until glossary replacement has finished before rewriting the DOM.
+  // Values: "pending" | "done" | "skipped".
+  function setReplacerStatus(value) {
+    if (document.documentElement) {
+      document.documentElement.setAttribute("data-glossary-replacer-status", value);
+    }
+  }
+
+  function notifyRulesUpdated() {
+    document.dispatchEvent(new Event("glossary-replacer:updated"));
+  }
 
   function storageGet(keys) {
     return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
@@ -338,8 +352,12 @@
       return;
     }
     const current = node.nodeValue;
+    if (lastWrittenValues.get(node) === current) {
+      return;
+    }
     const result = replaceString(current, engine);
     if (result.changed) {
+      lastWrittenValues.set(node, result.text);
       node.nodeValue = result.text;
     }
   }
@@ -411,11 +429,16 @@
     observer = null;
   }
 
-  async function reloadFromStorage() {
+  async function reloadFromStorage(options = {}) {
+    const hadEngine = Boolean(engine);
     const settings = await storageGet(STORAGE_DEFAULTS);
     if (!settings.enabled) {
       engine = null;
       stopObserver();
+      setReplacerStatus("skipped");
+      if (options.notify && hadEngine) {
+        notifyRulesUpdated();
+      }
       return;
     }
 
@@ -424,11 +447,20 @@
     if (engine.count === 0) {
       engine = null;
       stopObserver();
+      setReplacerStatus("skipped");
+      if (options.notify && hadEngine) {
+        notifyRulesUpdated();
+      }
       return;
     }
 
-    walkAndReplace(document.documentElement);
+    // Observe before walking so nothing added mid-walk slips through.
     startObserver();
+    walkAndReplace(document.documentElement);
+    setReplacerStatus("done");
+    if (options.notify) {
+      notifyRulesUpdated();
+    }
   }
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -441,14 +473,18 @@
       "globalUrlPatterns" in changes ||
       "localGlossaries" in changes
     ) {
-      reloadFromStorage().catch((error) => {
+      reloadFromStorage({ notify: true }).catch((error) => {
         console.error("Glossary reload failed", error);
       });
     }
   });
 
+  setReplacerStatus("pending");
+  startObserver();
+
   reloadFromStorage().catch((error) => {
     console.error("Glossary init failed", error);
+    setReplacerStatus("skipped");
   });
 
   document.addEventListener(
