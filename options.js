@@ -52,7 +52,10 @@ function setStatus(message, kind) {
 }
 
 function parsePairFromLine(line) {
-  const trimmed = String(line || "").trim();
+  const trimmed = String(line || "")
+    .replace(/[\u200b\u200c\u200d\u2060\ufeff]/g, "")
+    .replace(/\u00a0/g, " ")
+    .trim();
   if (!trimmed) {
     return null;
   }

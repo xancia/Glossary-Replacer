@@ -23,6 +23,16 @@
   const patternRegexCache = new Map();
   const lastWrittenValues = new WeakMap();
 
+  const diagnostics = {
+    url: window.location.href,
+    enabled: true,
+    globalMatched: false,
+    globalRuleCount: 0,
+    localMatchCount: 0,
+    localRuleCount: 0,
+    activeRuleCount: 0
+  };
+
   // Published on <html> so downstream extensions (e.g. the novel formatter)
   // can wait until glossary replacement has finished before rewriting the DOM.
   // Values: "pending" | "done" | "skipped".
@@ -40,8 +50,17 @@
     return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
   }
 
+  // Imported files often carry invisible characters (BOM, zero-width spaces,
+  // non-breaking spaces) that make a term silently fail to match page text.
+  function cleanGlossaryLine(value) {
+    return String(value || "")
+      .replace(/[\u200b\u200c\u200d\u2060\ufeff]/g, "")
+      .replace(/\u00a0/g, " ")
+      .trim();
+  }
+
   function parsePairFromLine(line) {
-    const trimmed = String(line || "").trim();
+    const trimmed = cleanGlossaryLine(line);
     if (!trimmed) {
       return null;
     }
@@ -119,18 +138,23 @@
       return patternRegexCache.get(key);
     }
 
-    const expandedPatterns = key.includes("://")
-      ? [key]
-      : [`https://${key}`, `http://${key}`];
+    // Accept "site.com/*", "https://site.com/*", "*://site.com/*". A pattern
+    // without a scheme matches http and https; the host also tolerates any
+    // leading subdomain (www., m., ...) unless the pattern already starts
+    // with a wildcard; a pattern without a path matches every path.
+    const schemeMatch = key.match(/^(\*|https?):\/\//i);
+    const scheme = schemeMatch ? schemeMatch[1].toLowerCase() : null;
+    const rest = schemeMatch ? key.slice(schemeMatch[0].length) : key;
+    const schemePart = scheme && scheme !== "*" ? `${scheme}://` : "https?://";
+    const subdomainPart = rest.startsWith("*") ? "" : "(?:[a-z0-9-]+\\.)*";
+    const pathPart = rest.includes("/") ? "" : "(?:[/?#].*)?";
+    const escaped = escapeRegex(rest).replace(/\\\*/g, ".*");
 
     const regexList = [];
-    for (const candidate of expandedPatterns) {
-      const escaped = escapeRegex(candidate).replace(/\\\*/g, ".*");
-      try {
-        regexList.push(new RegExp(`^${escaped}$`));
-      } catch (_error) {
-        // Ignore malformed patterns.
-      }
+    try {
+      regexList.push(new RegExp(`^${schemePart}${subdomainPart}${escaped}${pathPart}$`, "i"));
+    } catch (_error) {
+      // Ignore malformed patterns.
     }
 
     patternRegexCache.set(key, regexList);
@@ -185,6 +209,12 @@
     const globalMatched = urlMatchesAnyPattern(currentUrl, globalPatterns);
     const matchingLocal = getMatchingLocalGlossaries(currentUrl, settings.localGlossaries);
 
+    diagnostics.url = currentUrl;
+    diagnostics.globalMatched = globalMatched;
+    diagnostics.globalRuleCount = 0;
+    diagnostics.localMatchCount = matchingLocal.length;
+    diagnostics.localRuleCount = 0;
+
     if (!globalMatched && matchingLocal.length === 0) {
       return [];
     }
@@ -192,13 +222,17 @@
     const merged = new Map();
 
     if (globalMatched) {
-      for (const [source, target] of parseGlossary(settings.globalRulesText || "")) {
+      const globalEntries = parseGlossary(settings.globalRulesText || "");
+      diagnostics.globalRuleCount = globalEntries.length;
+      for (const [source, target] of globalEntries) {
         merged.set(source, target);
       }
     }
 
     for (const localEntry of matchingLocal) {
-      for (const [source, target] of parseGlossary(localEntry.rulesText || "")) {
+      const localEntries = parseGlossary(localEntry.rulesText || "");
+      diagnostics.localRuleCount += localEntries.length;
+      for (const [source, target] of localEntries) {
         merged.set(source, target);
       }
     }
@@ -432,8 +466,10 @@
   async function reloadFromStorage(options = {}) {
     const hadEngine = Boolean(engine);
     const settings = await storageGet(STORAGE_DEFAULTS);
+    diagnostics.enabled = Boolean(settings.enabled);
     if (!settings.enabled) {
       engine = null;
+      diagnostics.activeRuleCount = 0;
       stopObserver();
       setReplacerStatus("skipped");
       if (options.notify && hadEngine) {
@@ -444,6 +480,8 @@
 
     const entries = buildEffectiveEntries(settings, window.location.href);
     engine = buildTrie(entries);
+    diagnostics.activeRuleCount = engine.count;
+    console.debug("[glossary-replacer]", { ...diagnostics });
     if (engine.count === 0) {
       engine = null;
       stopObserver();
@@ -462,6 +500,20 @@
       notifyRulesUpdated();
     }
   }
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message && message.type === "glossary-diagnostics") {
+      sendResponse({
+        ok: true,
+        diagnostics: {
+          ...diagnostics,
+          status: document.documentElement
+            ? document.documentElement.getAttribute("data-glossary-replacer-status")
+            : null
+        }
+      });
+    }
+  });
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") {

@@ -30,6 +30,47 @@ async function loadState() {
   stats.textContent = `Global rules: ${globalRules} | Patterns: ${patterns} | Local: ${localGlossaries}`;
 }
 
+async function loadPageDiagnostics() {
+  const pageStats = document.getElementById("pageStats");
+
+  const [tab] = await new Promise((resolve) =>
+    chrome.tabs.query({ active: true, currentWindow: true }, resolve)
+  );
+  if (!tab || !tab.id) {
+    pageStats.textContent = "This page: unavailable";
+    return;
+  }
+
+  const response = await new Promise((resolve) => {
+    chrome.tabs.sendMessage(tab.id, { type: "glossary-diagnostics" }, (result) => {
+      if (chrome.runtime.lastError) {
+        resolve(null);
+        return;
+      }
+      resolve(result);
+    });
+  });
+
+  if (!response || !response.ok || !response.diagnostics) {
+    pageStats.textContent = "This page: not running (reload the tab?)";
+    return;
+  }
+
+  const d = response.diagnostics;
+  if (!d.enabled) {
+    pageStats.textContent = "This page: replacement disabled";
+    return;
+  }
+
+  const globalPart = d.globalMatched
+    ? `global ✓ ${d.globalRuleCount}`
+    : "global ✗ URL not in patterns";
+  const localPart = d.localMatchCount > 0
+    ? `local ✓ ${d.localRuleCount}`
+    : "local ✗";
+  pageStats.textContent = `This page: ${globalPart} | ${localPart} | active: ${d.activeRuleCount}`;
+}
+
 enabledInput.addEventListener("change", async () => {
   await storageSet({ enabled: enabledInput.checked });
 });
@@ -40,4 +81,8 @@ openOptionsBtn.addEventListener("click", () => {
 
 loadState().catch((error) => {
   stats.textContent = `Error: ${String(error)}`;
+});
+
+loadPageDiagnostics().catch(() => {
+  document.getElementById("pageStats").textContent = "This page: unavailable";
 });
