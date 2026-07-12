@@ -495,7 +495,13 @@
     // Observe before walking so nothing added mid-walk slips through.
     startObserver();
     walkAndReplace(document.documentElement);
-    setReplacerStatus("done");
+    // At document_start this walk only sees the part of the document parsed
+    // so far, so the "done" signal would be a lie — downstream extensions
+    // (the novel formatter) would stop waiting and format before the chapter
+    // text was replaced. Keep "pending" until the DOMContentLoaded walk runs.
+    if (document.readyState !== "loading") {
+      setReplacerStatus("done");
+    }
     if (options.notify) {
       notifyRulesUpdated();
     }
@@ -544,6 +550,7 @@
     () => {
       if (engine && engine.count > 0) {
         walkAndReplace(document.documentElement);
+        setReplacerStatus("done");
       }
       startObserver();
     },
