@@ -18,10 +18,51 @@
     "OPTION"
   ]);
 
+  const TEXT_FLOW_BOUNDARY_TAGS = new Set([
+    "ADDRESS",
+    "ARTICLE",
+    "ASIDE",
+    "BLOCKQUOTE",
+    "BR",
+    "DD",
+    "DIV",
+    "DL",
+    "DT",
+    "FIELDSET",
+    "FIGCAPTION",
+    "FIGURE",
+    "FOOTER",
+    "FORM",
+    "H1",
+    "H2",
+    "H3",
+    "H4",
+    "H5",
+    "H6",
+    "HEADER",
+    "HR",
+    "LI",
+    "MAIN",
+    "NAV",
+    "OL",
+    "P",
+    "PRE",
+    "SECTION",
+    "TABLE",
+    "TBODY",
+    "TD",
+    "TFOOT",
+    "TH",
+    "THEAD",
+    "TR",
+    "UL"
+  ]);
+
   let engine = null;
   let observer = null;
   const patternRegexCache = new Map();
   const lastWrittenValues = new WeakMap();
+  const replacementBoundaries = new WeakMap();
 
   const diagnostics = {
     url: window.location.href,
@@ -290,12 +331,22 @@
 
   function replaceString(input, trie) {
     if (!input || !trie || trie.count === 0) {
-      return { text: input, changed: false };
+      return {
+        text: input,
+        changed: false,
+        startsWithReplacement: false,
+        firstReplacementText: "",
+        endsWithReplacement: false,
+        lastReplacementText: ""
+      };
     }
 
     let output = "";
     let changed = false;
     let i = 0;
+    let hasOutput = false;
+    let startsWithReplacement = false;
+    let firstReplacementText = "";
     let lastSegmentWasReplacement = false;
     let lastReplacementText = "";
 
@@ -304,6 +355,7 @@
       if (!trie.startChars.has(first)) {
         output += first;
         i += 1;
+        hasOutput = true;
         lastSegmentWasReplacement = false;
         lastReplacementText = "";
         continue;
@@ -313,6 +365,7 @@
       if (!node) {
         output += first;
         i += 1;
+        hasOutput = true;
         lastSegmentWasReplacement = false;
         lastReplacementText = "";
         continue;
@@ -336,6 +389,10 @@
       }
 
       if (bestLength > 0) {
+        if (!hasOutput) {
+          startsWithReplacement = true;
+          firstReplacementText = bestReplacement;
+        }
         if (
           lastSegmentWasReplacement &&
           shouldInsertSpaceBetweenReplacements(lastReplacementText, bestReplacement)
@@ -345,17 +402,72 @@
         output += bestReplacement;
         i += bestLength;
         changed = true;
+        hasOutput = true;
         lastSegmentWasReplacement = true;
         lastReplacementText = bestReplacement;
       } else {
         output += first;
         i += 1;
+        hasOutput = true;
         lastSegmentWasReplacement = false;
         lastReplacementText = "";
       }
     }
 
-    return { text: output, changed };
+    return {
+      text: output,
+      changed,
+      startsWithReplacement,
+      firstReplacementText,
+      endsWithReplacement: lastSegmentWasReplacement,
+      lastReplacementText
+    };
+  }
+
+  function getPreviousTextNode(node) {
+    let current = node;
+
+    while (current && current !== document.documentElement) {
+      if (
+        current !== node &&
+        current.nodeType === Node.ELEMENT_NODE &&
+        TEXT_FLOW_BOUNDARY_TAGS.has(current.tagName)
+      ) {
+        return null;
+      }
+
+      if (current.previousSibling) {
+        current = current.previousSibling;
+        if (
+          current.nodeType === Node.ELEMENT_NODE &&
+          TEXT_FLOW_BOUNDARY_TAGS.has(current.tagName)
+        ) {
+          return null;
+        }
+        while (current.lastChild) {
+          current = current.lastChild;
+          if (
+            current.nodeType === Node.ELEMENT_NODE &&
+            TEXT_FLOW_BOUNDARY_TAGS.has(current.tagName)
+          ) {
+            return null;
+          }
+        }
+      } else {
+        current = current.parentNode;
+        continue;
+      }
+
+      if (
+        current.nodeType === Node.TEXT_NODE &&
+        current.nodeValue &&
+        !shouldSkipTextNode(current)
+      ) {
+        return current;
+      }
+    }
+
+    return null;
   }
 
   function shouldSkipTextNode(node) {
@@ -391,8 +503,36 @@
     }
     const result = replaceString(current, engine);
     if (result.changed) {
-      lastWrittenValues.set(node, result.text);
-      node.nodeValue = result.text;
+      let nextText = result.text;
+
+      // Adjacent visible terms are sometimes split across inline DOM nodes.
+      // Carry replacement-boundary information across those nodes so their
+      // Latin replacements do not run together (for example, UchihaObitoh).
+      if (result.startsWithReplacement) {
+        const previousNode = getPreviousTextNode(node);
+        const previousBoundary = previousNode
+          ? replacementBoundaries.get(previousNode)
+          : null;
+        if (
+          previousBoundary &&
+          previousBoundary.endsWithReplacement &&
+          shouldInsertSpaceBetweenReplacements(
+            previousBoundary.lastReplacementText,
+            result.firstReplacementText
+          )
+        ) {
+          nextText = ` ${nextText}`;
+        }
+      }
+
+      replacementBoundaries.set(node, {
+        endsWithReplacement: result.endsWithReplacement,
+        lastReplacementText: result.lastReplacementText
+      });
+      lastWrittenValues.set(node, nextText);
+      node.nodeValue = nextText;
+    } else {
+      replacementBoundaries.delete(node);
     }
   }
 
@@ -557,4 +697,3 @@
     { once: true }
   );
 })();
-
