@@ -78,4 +78,6 @@ On matching local URLs, the local value is used.
 
 - Includes `default-glossary.md` loaded on first install.
 - Replacements apply to initial and dynamic page content.
+- Each replaced term is marked `translate="no"` so Chrome Translate preserves the exact glossary spelling.
+- The popup reports actual terms matched and protected on the current page; an active-rule count alone does not mean a term was found.
 - If the same source appears multiple times in one glossary, last one wins.

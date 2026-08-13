@@ -71,7 +71,11 @@
     globalRuleCount: 0,
     localMatchCount: 0,
     localRuleCount: 0,
-    activeRuleCount: 0
+    activeRuleCount: 0,
+    matchedTermCount: 0,
+    changedNodeCount: 0,
+    protectedTermCount: 0,
+    lastReplacementAt: null
   };
 
   // Published on <html> so downstream extensions (e.g. the novel formatter)
@@ -334,6 +338,8 @@
       return {
         text: input,
         changed: false,
+        pieces: [{ text: input, replacement: false }],
+        matchCount: 0,
         startsWithReplacement: false,
         firstReplacementText: "",
         endsWithReplacement: false,
@@ -342,7 +348,9 @@
     }
 
     let output = "";
+    const pieces = [];
     let changed = false;
+    let matchCount = 0;
     let i = 0;
     let hasOutput = false;
     let startsWithReplacement = false;
@@ -350,10 +358,23 @@
     let lastSegmentWasReplacement = false;
     let lastReplacementText = "";
 
+    function appendPiece(text, replacement) {
+      if (!text) {
+        return;
+      }
+      const previous = pieces[pieces.length - 1];
+      if (previous && previous.replacement === replacement) {
+        previous.text += text;
+      } else {
+        pieces.push({ text, replacement });
+      }
+    }
+
     while (i < input.length) {
       const first = input[i];
       if (!trie.startChars.has(first)) {
         output += first;
+        appendPiece(first, false);
         i += 1;
         hasOutput = true;
         lastSegmentWasReplacement = false;
@@ -364,6 +385,7 @@
       let node = trie.root.next[first];
       if (!node) {
         output += first;
+        appendPiece(first, false);
         i += 1;
         hasOutput = true;
         lastSegmentWasReplacement = false;
@@ -398,15 +420,19 @@
           shouldInsertSpaceBetweenReplacements(lastReplacementText, bestReplacement)
         ) {
           output += " ";
+          appendPiece(" ", false);
         }
         output += bestReplacement;
+        appendPiece(bestReplacement, true);
         i += bestLength;
         changed = true;
+        matchCount += 1;
         hasOutput = true;
         lastSegmentWasReplacement = true;
         lastReplacementText = bestReplacement;
       } else {
         output += first;
+        appendPiece(first, false);
         i += 1;
         hasOutput = true;
         lastSegmentWasReplacement = false;
@@ -417,6 +443,8 @@
     return {
       text: output,
       changed,
+      pieces,
+      matchCount,
       startsWithReplacement,
       firstReplacementText,
       endsWithReplacement: lastSegmentWasReplacement,
@@ -461,7 +489,7 @@
       if (
         current.nodeType === Node.TEXT_NODE &&
         current.nodeValue &&
-        !shouldSkipTextNode(current)
+        (!shouldSkipTextNode(current) || isProtectedTermTextNode(current))
       ) {
         return current;
       }
@@ -493,6 +521,49 @@
     return false;
   }
 
+  function isProtectedTermTextNode(node) {
+    const parent = node && node.parentElement;
+    return Boolean(parent && parent.closest("[data-glossary-replacer-term='1']"));
+  }
+
+  function canProtectReplacement(node) {
+    const parent = node && node.parentElement;
+    if (!parent || parent.namespaceURI !== "http://www.w3.org/1999/xhtml") {
+      return false;
+    }
+
+    return !parent.closest("title, script, style, noscript, textarea, input, select, option, svg, math");
+  }
+
+  function replaceWithProtectedTerms(node, result, addLeadingSpace) {
+    const fragment = document.createDocumentFragment();
+    let lastReplacementTextNode = null;
+
+    if (addLeadingSpace) {
+      fragment.appendChild(document.createTextNode(" "));
+    }
+
+    for (const piece of result.pieces) {
+      if (!piece.replacement) {
+        fragment.appendChild(document.createTextNode(piece.text));
+        continue;
+      }
+
+      const term = document.createElement("span");
+      term.className = "notranslate";
+      term.setAttribute("translate", "no");
+      term.setAttribute("data-glossary-replacer-skip", "1");
+      term.setAttribute("data-glossary-replacer-term", "1");
+      term.textContent = piece.text;
+      lastReplacementTextNode = term.firstChild;
+      fragment.appendChild(term);
+      diagnostics.protectedTermCount += 1;
+    }
+
+    node.replaceWith(fragment);
+    return lastReplacementTextNode;
+  }
+
   function replaceTextNode(node) {
     if (!engine || shouldSkipTextNode(node)) {
       return;
@@ -504,6 +575,7 @@
     const result = replaceString(current, engine);
     if (result.changed) {
       let nextText = result.text;
+      let addLeadingSpace = false;
 
       // Adjacent visible terms are sometimes split across inline DOM nodes.
       // Carry replacement-boundary information across those nodes so their
@@ -522,15 +594,30 @@
           )
         ) {
           nextText = ` ${nextText}`;
+          addLeadingSpace = true;
         }
       }
 
-      replacementBoundaries.set(node, {
-        endsWithReplacement: result.endsWithReplacement,
-        lastReplacementText: result.lastReplacementText
-      });
-      lastWrittenValues.set(node, nextText);
-      node.nodeValue = nextText;
+      diagnostics.matchedTermCount += result.matchCount;
+      diagnostics.changedNodeCount += 1;
+      diagnostics.lastReplacementAt = Date.now();
+
+      if (canProtectReplacement(node)) {
+        const boundaryNode = replaceWithProtectedTerms(node, result, addLeadingSpace);
+        if (boundaryNode && result.endsWithReplacement) {
+          replacementBoundaries.set(boundaryNode, {
+            endsWithReplacement: true,
+            lastReplacementText: result.lastReplacementText
+          });
+        }
+      } else {
+        replacementBoundaries.set(node, {
+          endsWithReplacement: result.endsWithReplacement,
+          lastReplacementText: result.lastReplacementText
+        });
+        lastWrittenValues.set(node, nextText);
+        node.nodeValue = nextText;
+      }
     } else {
       replacementBoundaries.delete(node);
     }
