@@ -8,6 +8,9 @@
     localGlossaries: []
   };
 
+  const INITIAL_REPLACEMENT_SETTLE_MS = 250;
+  const TRANSLATION_GATE_MAX_MS = 3000;
+
   const SKIP_TAGS = new Set([
     "SCRIPT",
     "STYLE",
@@ -60,6 +63,12 @@
 
   let engine = null;
   let observer = null;
+  let initialPassPending = true;
+  let initialSettleTimer = 0;
+  let translationGateTimer = 0;
+  let translationGateActive = false;
+  let rootHadTranslateAttribute = false;
+  let rootTranslateAttribute = null;
   const patternRegexCache = new Map();
   const lastWrittenValues = new WeakMap();
   const replacementBoundaries = new WeakMap();
@@ -85,6 +94,77 @@
 
   function notifyRulesUpdated() {
     document.dispatchEvent(new Event("glossary-replacer:updated"));
+  }
+
+  // Chrome Translate can start while a dynamically rendered chapter is still
+  // arriving. Temporarily pause translation during the initial glossary pass,
+  // then restore the page's original setting. Replacement targets remain
+  // fully translatable after this short gate is released.
+  function holdTranslationForInitialPass() {
+    const root = document.documentElement;
+    if (!root || translationGateActive) {
+      return;
+    }
+
+    translationGateActive = true;
+    rootHadTranslateAttribute = root.hasAttribute("translate");
+    rootTranslateAttribute = root.getAttribute("translate");
+    root.setAttribute("translate", "no");
+
+    clearTimeout(translationGateTimer);
+    translationGateTimer = window.setTimeout(() => {
+      completeInitialPass();
+    }, TRANSLATION_GATE_MAX_MS);
+  }
+
+  function releaseTranslationGate() {
+    const root = document.documentElement;
+    clearTimeout(translationGateTimer);
+    translationGateTimer = 0;
+
+    if (!translationGateActive || !root) {
+      return;
+    }
+
+    if (rootHadTranslateAttribute) {
+      root.setAttribute("translate", rootTranslateAttribute || "");
+    } else {
+      root.removeAttribute("translate");
+    }
+    translationGateActive = false;
+  }
+
+  function scheduleInitialPassCompletion() {
+    if (!initialPassPending || document.readyState === "loading" || !engine) {
+      return;
+    }
+
+    clearTimeout(initialSettleTimer);
+    initialSettleTimer = window.setTimeout(() => {
+      completeInitialPass();
+    }, INITIAL_REPLACEMENT_SETTLE_MS);
+  }
+
+  function completeInitialPass() {
+    if (!initialPassPending) {
+      releaseTranslationGate();
+      return;
+    }
+
+    clearTimeout(initialSettleTimer);
+    initialSettleTimer = 0;
+
+    // One final atomic walk catches nodes added near the end of the quiet
+    // period before Chrome is allowed to translate the completed text.
+    if (engine && engine.count > 0) {
+      walkAndReplace(document.documentElement);
+      setReplacerStatus("done");
+    } else {
+      setReplacerStatus("skipped");
+    }
+
+    initialPassPending = false;
+    releaseTranslationGate();
   }
 
   function storageGet(keys) {
@@ -586,6 +666,8 @@
           }
         }
       }
+
+      scheduleInitialPassCompletion();
     });
 
     observer.observe(document.documentElement, {
@@ -611,7 +693,9 @@
       engine = null;
       diagnostics.activeRuleCount = 0;
       stopObserver();
+      initialPassPending = false;
       setReplacerStatus("skipped");
+      releaseTranslationGate();
       if (options.notify && hadEngine) {
         notifyRulesUpdated();
       }
@@ -625,7 +709,9 @@
     if (engine.count === 0) {
       engine = null;
       stopObserver();
+      initialPassPending = false;
       setReplacerStatus("skipped");
+      releaseTranslationGate();
       if (options.notify && hadEngine) {
         notifyRulesUpdated();
       }
@@ -636,11 +722,11 @@
     startObserver();
     walkAndReplace(document.documentElement);
     // At document_start this walk only sees the part of the document parsed
-    // so far, so the "done" signal would be a lie — downstream extensions
-    // (the novel formatter) would stop waiting and format before the chapter
-    // text was replaced. Keep "pending" until the DOMContentLoaded walk runs.
+    // so far. Keep "pending" through a short post-DOMContentLoaded quiet
+    // period so neither Chrome Translate nor the formatter can overtake
+    // progressively inserted chapter nodes.
     if (document.readyState !== "loading") {
-      setReplacerStatus("done");
+      scheduleInitialPassCompletion();
     }
     if (options.notify) {
       notifyRulesUpdated();
@@ -678,11 +764,14 @@
   });
 
   setReplacerStatus("pending");
+  holdTranslationForInitialPass();
   startObserver();
 
   reloadFromStorage().catch((error) => {
     console.error("Glossary init failed", error);
+    initialPassPending = false;
     setReplacerStatus("skipped");
+    releaseTranslationGate();
   });
 
   document.addEventListener(
@@ -690,7 +779,7 @@
     () => {
       if (engine && engine.count > 0) {
         walkAndReplace(document.documentElement);
-        setReplacerStatus("done");
+        scheduleInitialPassCompletion();
       }
       startObserver();
     },
