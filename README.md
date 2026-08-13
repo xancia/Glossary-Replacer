@@ -78,6 +78,8 @@ On matching local URLs, the local value is used.
 
 - Includes `default-glossary.md` loaded on first install.
 - Replacements apply to initial and dynamic page content.
-- Replacements run immediately without delaying Chrome Translate.
+- Replacements run immediately once the stored rules are ready, with no post-replacement settling delay.
 - Adjacent replacement boundaries are passed to Novel Reader & Formatter with an invisible marker; the formatter adds the visible space after translation.
+- A short readiness latch covers only asynchronous rule loading plus the first replacement walk; it has no fixed settling delay and releases immediately when ready.
+- The replacement engine runs in the top-level page rather than repeating the full glossary inside advertising frames.
 - If the same source appears multiple times in one glossary, last one wins.

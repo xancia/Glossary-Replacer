@@ -11,6 +11,7 @@
   // Invisible separator retained between adjacent glossary replacements.
   // The formatter converts it to a visible space after Chrome Translate.
   const TERM_BOUNDARY_MARKER = "\u2063";
+  const READINESS_LATCH_MAX_MS = 750;
 
   const SKIP_TAGS = new Set([
     "SCRIPT",
@@ -64,6 +65,10 @@
 
   let engine = null;
   let observer = null;
+  let readinessLatchActive = false;
+  let readinessLatchTimer = 0;
+  let rootHadTranslateAttribute = false;
+  let rootTranslateAttribute = null;
   const patternRegexCache = new Map();
   const lastWrittenValues = new WeakMap();
   const replacementBoundaries = new WeakMap();
@@ -75,7 +80,8 @@
     globalRuleCount: 0,
     localMatchCount: 0,
     localRuleCount: 0,
-    activeRuleCount: 0
+    activeRuleCount: 0,
+    engineReadyMs: null
   };
 
   // Published on <html> so downstream extensions (e.g. the novel formatter)
@@ -89,6 +95,39 @@
 
   function notifyRulesUpdated() {
     document.dispatchEvent(new Event("glossary-replacer:updated"));
+  }
+
+  // Storage access is asynchronous even at document_start. Hold Chrome
+  // Translate only until the trie is ready and the first atomic walk has
+  // completed. There is no DOM quiet-period wait.
+  function holdTranslationUntilReady() {
+    const root = document.documentElement;
+    if (!root || readinessLatchActive) {
+      return;
+    }
+
+    readinessLatchActive = true;
+    rootHadTranslateAttribute = root.hasAttribute("translate");
+    rootTranslateAttribute = root.getAttribute("translate");
+    root.setAttribute("translate", "no");
+    readinessLatchTimer = window.setTimeout(releaseTranslationReadinessLatch, READINESS_LATCH_MAX_MS);
+  }
+
+  function releaseTranslationReadinessLatch() {
+    const root = document.documentElement;
+    clearTimeout(readinessLatchTimer);
+    readinessLatchTimer = 0;
+
+    if (!readinessLatchActive || !root) {
+      return;
+    }
+
+    if (rootHadTranslateAttribute) {
+      root.setAttribute("translate", rootTranslateAttribute || "");
+    } else {
+      root.removeAttribute("translate");
+    }
+    readinessLatchActive = false;
   }
 
   function storageGet(keys) {
@@ -608,6 +647,7 @@
   }
 
   async function reloadFromStorage(options = {}) {
+    const loadStartedAt = performance.now();
     const hadEngine = Boolean(engine);
     const settings = await storageGet(STORAGE_DEFAULTS);
     diagnostics.enabled = Boolean(settings.enabled);
@@ -616,6 +656,7 @@
       diagnostics.activeRuleCount = 0;
       stopObserver();
       setReplacerStatus("skipped");
+      releaseTranslationReadinessLatch();
       if (options.notify && hadEngine) {
         notifyRulesUpdated();
       }
@@ -630,6 +671,7 @@
       engine = null;
       stopObserver();
       setReplacerStatus("skipped");
+      releaseTranslationReadinessLatch();
       if (options.notify && hadEngine) {
         notifyRulesUpdated();
       }
@@ -639,6 +681,8 @@
     // Observe before walking so nothing added mid-walk slips through.
     startObserver();
     walkAndReplace(document.documentElement);
+    diagnostics.engineReadyMs = Math.round(performance.now() - loadStartedAt);
+    releaseTranslationReadinessLatch();
     // At document_start this walk only sees the part of the document parsed
     // so far, so the "done" signal would be a lie — downstream extensions
     // should wait until the DOMContentLoaded walk has completed.
@@ -681,11 +725,13 @@
   });
 
   setReplacerStatus("pending");
+  holdTranslationUntilReady();
   startObserver();
 
   reloadFromStorage().catch((error) => {
     console.error("Glossary init failed", error);
     setReplacerStatus("skipped");
+    releaseTranslationReadinessLatch();
   });
 
   document.addEventListener(

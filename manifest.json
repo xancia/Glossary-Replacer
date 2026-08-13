@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Glossary Pre-Translate Replacer",
-  "version": "1.2.4",
+  "version": "1.2.5",
   "description": "Replaces glossary terms on pages before translation.",
   "permissions": [
     "storage"
@@ -17,8 +17,7 @@
       "js": [
         "content.js"
       ],
-      "run_at": "document_start",
-      "all_frames": true
+      "run_at": "document_start"
     }
   ],
   "options_page": "options.html",
