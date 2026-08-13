@@ -68,9 +68,7 @@ async function loadPageDiagnostics() {
   const localPart = d.localMatchCount > 0
     ? `local ✓ ${d.localRuleCount}`
     : "local ✗";
-  const matchPart = `matched: ${Number(d.matchedTermCount || 0)}`;
-  const protectedPart = `protected: ${Number(d.protectedTermCount || 0)}`;
-  pageStats.textContent = `This page: ${globalPart} | ${localPart} | active: ${d.activeRuleCount} | ${matchPart} | ${protectedPart}`;
+  pageStats.textContent = `This page: ${globalPart} | ${localPart} | active: ${d.activeRuleCount}`;
 }
 
 enabledInput.addEventListener("change", async () => {
