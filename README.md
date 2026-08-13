@@ -78,6 +78,6 @@ On matching local URLs, the local value is used.
 
 - Includes `default-glossary.md` loaded on first install.
 - Replacements apply to initial and dynamic page content.
-- Chrome Translate is paused only during the initial replacement pass and released after a short DOM quiet period, so adjacent terms are spaced before translation begins.
-- Replacement targets remain ordinary translatable text after the initial pass.
+- Replacements run immediately without delaying Chrome Translate.
+- Adjacent replacement boundaries are passed to Novel Reader & Formatter with an invisible marker; the formatter adds the visible space after translation.
 - If the same source appears multiple times in one glossary, last one wins.
