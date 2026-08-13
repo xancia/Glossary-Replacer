@@ -5,13 +5,16 @@
     enabled: true,
     globalRulesText: "",
     globalUrlPatterns: ["https://69shuba.tw/*"],
-    localGlossaries: []
+    localGlossaries: [],
+    lastUpdated: 0
   };
 
   // Invisible separator retained between adjacent glossary replacements.
   // The formatter converts it to a visible space after Chrome Translate.
   const TERM_BOUNDARY_MARKER = "\u2063";
   const READINESS_LATCH_MAX_MS = 5000;
+  const SESSION_CACHE_KEY = "__glossary_replacer_settings_v1";
+  const SESSION_CACHE_MAX_CHARS = 2_000_000;
 
   const SKIP_TAGS = new Set([
     "SCRIPT",
@@ -84,7 +87,8 @@
     localRuleCount: 0,
     activeRuleCount: 0,
     engineReadyMs: null,
-    translationReleasedMs: null
+    translationReleasedMs: null,
+    sessionCacheHit: false
   };
 
   // Published on <html> so downstream extensions (e.g. the novel formatter)
@@ -155,6 +159,80 @@
 
   function storageGet(keys) {
     return new Promise((resolve) => chrome.storage.local.get(keys, resolve));
+  }
+
+  function readSessionSettingsCache() {
+    try {
+      const raw = window.sessionStorage.getItem(SESSION_CACHE_KEY);
+      if (!raw || raw.length > SESSION_CACHE_MAX_CHARS) {
+        return null;
+      }
+
+      const cached = JSON.parse(raw);
+      if (!cached || cached.schema !== 1 || !cached.settings) {
+        return null;
+      }
+
+      const settings = cached.settings;
+      if (typeof settings.enabled !== "boolean"
+        || typeof settings.globalRulesText !== "string"
+        || !Array.isArray(settings.globalUrlPatterns)
+        || !Array.isArray(settings.localGlossaries)) {
+        return null;
+      }
+
+      return settings;
+    } catch (_error) {
+      return null;
+    }
+  }
+
+  function writeSessionSettingsCache(settings) {
+    try {
+      const value = JSON.stringify({
+        schema: 1,
+        settings: {
+          enabled: Boolean(settings.enabled),
+          globalRulesText: String(settings.globalRulesText || ""),
+          globalUrlPatterns: Array.isArray(settings.globalUrlPatterns)
+            ? settings.globalUrlPatterns
+            : [],
+          localGlossaries: Array.isArray(settings.localGlossaries)
+            ? settings.localGlossaries
+            : [],
+          lastUpdated: Number(settings.lastUpdated || 0)
+        }
+      });
+
+      if (value.length <= SESSION_CACHE_MAX_CHARS) {
+        window.sessionStorage.setItem(SESSION_CACHE_KEY, value);
+      }
+    } catch (_error) {
+      // Web Storage can be unavailable under restrictive site/privacy modes.
+    }
+  }
+
+  function bootstrapFromSessionCache() {
+    const startedAt = performance.now();
+    const settings = readSessionSettingsCache();
+    if (!settings || !settings.enabled) {
+      return false;
+    }
+
+    const entries = buildEffectiveEntries(settings, window.location.href);
+    const cachedEngine = buildTrie(entries);
+    if (cachedEngine.count === 0) {
+      return false;
+    }
+
+    engine = cachedEngine;
+    replacementEngineReady = true;
+    diagnostics.enabled = true;
+    diagnostics.activeRuleCount = cachedEngine.count;
+    diagnostics.engineReadyMs = Math.round(performance.now() - startedAt);
+    diagnostics.translationReleasedMs = 0;
+    diagnostics.sessionCacheHit = true;
+    return true;
   }
 
   // Imported files often carry invisible characters (BOM, zero-width spaces,
@@ -676,6 +754,7 @@
     const hadEngine = Boolean(engine);
     replacementEngineReady = false;
     const settings = await storageGet(STORAGE_DEFAULTS);
+    writeSessionSettingsCache(settings);
     diagnostics.enabled = Boolean(settings.enabled);
     if (!settings.enabled) {
       engine = null;
@@ -708,6 +787,7 @@
     startObserver();
     walkAndReplace(document.documentElement);
     diagnostics.engineReadyMs = Math.round(performance.now() - loadStartedAt);
+    diagnostics.sessionCacheHit = diagnostics.sessionCacheHit === true;
     replacementEngineReady = true;
     releaseTranslationWhenContentIsReady();
     // At document_start this walk only sees the part of the document parsed
@@ -752,13 +832,21 @@
   });
 
   setReplacerStatus("pending");
-  holdTranslationUntilReady();
+  const bootstrappedFromSession = bootstrapFromSessionCache();
+  if (!bootstrappedFromSession) {
+    holdTranslationUntilReady();
+  }
   startObserver();
+  if (bootstrappedFromSession) {
+    walkAndReplace(document.documentElement);
+  }
 
   reloadFromStorage().catch((error) => {
     console.error("Glossary init failed", error);
-    setReplacerStatus("skipped");
-    releaseTranslationReadinessLatch();
+    if (!engine) {
+      setReplacerStatus("skipped");
+      releaseTranslationReadinessLatch();
+    }
   });
 
   document.addEventListener(

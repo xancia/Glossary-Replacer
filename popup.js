@@ -72,7 +72,8 @@ async function loadPageDiagnostics() {
   const releasedPart = Number.isFinite(d.translationReleasedMs)
     ? `released: ${d.translationReleasedMs}ms`
     : "released: pending";
-  pageStats.textContent = `This page: ${globalPart} | ${localPart} | active: ${d.activeRuleCount} | ${readyPart} | ${releasedPart}`;
+  const cachePart = d.sessionCacheHit ? "cache: hit" : "cache: miss";
+  pageStats.textContent = `This page: ${globalPart} | ${localPart} | active: ${d.activeRuleCount} | ${cachePart} | ${readyPart} | ${releasedPart}`;
 }
 
 enabledInput.addEventListener("change", async () => {

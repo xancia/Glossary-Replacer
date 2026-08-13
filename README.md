@@ -82,4 +82,5 @@ On matching local URLs, the local value is used.
 - Adjacent replacement boundaries are passed to Novel Reader & Formatter with an invisible marker; the formatter adds the visible space after translation.
 - A readiness latch covers asynchronous rule loading and parsing, then releases immediately after one complete DOMContentLoaded replacement walk. It has no post-load settling delay and advertisements cannot extend it.
 - The replacement engine runs in the top-level page rather than repeating the full glossary inside advertising frames.
+- Same-tab chapter navigation uses a session-only settings cache to build the glossary trie synchronously at `document_start`, before the asynchronous extension-storage refresh completes.
 - If the same source appears multiple times in one glossary, last one wins.
