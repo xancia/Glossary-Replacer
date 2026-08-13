@@ -69,7 +69,10 @@ async function loadPageDiagnostics() {
     ? `local ✓ ${d.localRuleCount}`
     : "local ✗";
   const readyPart = Number.isFinite(d.engineReadyMs) ? `ready: ${d.engineReadyMs}ms` : "ready: pending";
-  pageStats.textContent = `This page: ${globalPart} | ${localPart} | active: ${d.activeRuleCount} | ${readyPart}`;
+  const releasedPart = Number.isFinite(d.translationReleasedMs)
+    ? `released: ${d.translationReleasedMs}ms`
+    : "released: pending";
+  pageStats.textContent = `This page: ${globalPart} | ${localPart} | active: ${d.activeRuleCount} | ${readyPart} | ${releasedPart}`;
 }
 
 enabledInput.addEventListener("change", async () => {

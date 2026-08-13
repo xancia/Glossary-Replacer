@@ -11,7 +11,7 @@
   // Invisible separator retained between adjacent glossary replacements.
   // The formatter converts it to a visible space after Chrome Translate.
   const TERM_BOUNDARY_MARKER = "\u2063";
-  const READINESS_LATCH_MAX_MS = 750;
+  const READINESS_LATCH_MAX_MS = 5000;
 
   const SKIP_TAGS = new Set([
     "SCRIPT",
@@ -67,6 +67,8 @@
   let observer = null;
   let readinessLatchActive = false;
   let readinessLatchTimer = 0;
+  let readinessLatchStartedAt = 0;
+  let replacementEngineReady = false;
   let rootHadTranslateAttribute = false;
   let rootTranslateAttribute = null;
   const patternRegexCache = new Map();
@@ -81,7 +83,8 @@
     localMatchCount: 0,
     localRuleCount: 0,
     activeRuleCount: 0,
-    engineReadyMs: null
+    engineReadyMs: null,
+    translationReleasedMs: null
   };
 
   // Published on <html> so downstream extensions (e.g. the novel formatter)
@@ -107,10 +110,16 @@
     }
 
     readinessLatchActive = true;
+    readinessLatchStartedAt = performance.now();
     rootHadTranslateAttribute = root.hasAttribute("translate");
     rootTranslateAttribute = root.getAttribute("translate");
     root.setAttribute("translate", "no");
-    readinessLatchTimer = window.setTimeout(releaseTranslationReadinessLatch, READINESS_LATCH_MAX_MS);
+    readinessLatchTimer = window.setTimeout(() => {
+      if (replacementEngineReady) {
+        walkAndReplace(document.documentElement);
+      }
+      releaseTranslationReadinessLatch();
+    }, READINESS_LATCH_MAX_MS);
   }
 
   function releaseTranslationReadinessLatch() {
@@ -128,6 +137,20 @@
       root.removeAttribute("translate");
     }
     readinessLatchActive = false;
+    diagnostics.translationReleasedMs = Math.round(performance.now() - readinessLatchStartedAt);
+  }
+
+  function releaseTranslationWhenContentIsReady() {
+    if (!readinessLatchActive
+      || !replacementEngineReady
+      || document.readyState === "loading") {
+      return;
+    }
+
+    // Cover the complete parsed document before Chrome is unblocked. This is
+    // immediate at DOMContentLoaded—there is no debounce or settling timer.
+    walkAndReplace(document.documentElement);
+    releaseTranslationReadinessLatch();
   }
 
   function storageGet(keys) {
@@ -629,6 +652,8 @@
           }
         }
       }
+
+      releaseTranslationWhenContentIsReady();
     });
 
     observer.observe(document.documentElement, {
@@ -649,6 +674,7 @@
   async function reloadFromStorage(options = {}) {
     const loadStartedAt = performance.now();
     const hadEngine = Boolean(engine);
+    replacementEngineReady = false;
     const settings = await storageGet(STORAGE_DEFAULTS);
     diagnostics.enabled = Boolean(settings.enabled);
     if (!settings.enabled) {
@@ -682,7 +708,8 @@
     startObserver();
     walkAndReplace(document.documentElement);
     diagnostics.engineReadyMs = Math.round(performance.now() - loadStartedAt);
-    releaseTranslationReadinessLatch();
+    replacementEngineReady = true;
+    releaseTranslationWhenContentIsReady();
     // At document_start this walk only sees the part of the document parsed
     // so far, so the "done" signal would be a lie — downstream extensions
     // should wait until the DOMContentLoaded walk has completed.
@@ -740,6 +767,7 @@
       if (engine && engine.count > 0) {
         walkAndReplace(document.documentElement);
         setReplacerStatus("done");
+        releaseTranslationWhenContentIsReady();
       }
       startObserver();
     },
